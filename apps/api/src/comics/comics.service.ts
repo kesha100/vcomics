@@ -2,56 +2,93 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { Injectable } from '@nestjs/common';
 import { v4 as uuidv4 } from 'uuid';
-import axios from 'axios';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { OpenAI } from 'openai';
+import Replicate from 'replicate';
+import axios from 'axios';
+import { Prisma } from '@prisma/client';
+import { PrismaService } from '../../prisma/prisma.service';
+interface Panel {
+  panel: number;
+  description: string;
+  text: string[];
+}
 
 @Injectable()
 export class ComicsService {
-  private readonly openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  private readonly supabase: SupabaseClient<any, 'public', any> = createClient(
-    process.env.SUPABASE_API_URL,
-    process.env.SUPABASE_API_KEY,
-  );
-  constructor(@InjectQueue('comics-generation') private comicsQueue: Queue) {}
+  private readonly openai: OpenAI;
+  private readonly supabase: SupabaseClient;
+  private readonly replicate: Replicate;
 
-  async createComic(
-    panelScenarioDescription: string,
-    panelNumber: number,
-  ): Promise<any> {
+  constructor(
+    @InjectQueue('comics-generation') private comicsQueue: Queue,
+    private prisma: PrismaService,
+  ) {
+    this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    this.supabase = createClient(
+      process.env.SUPABASE_API_URL,
+      process.env.SUPABASE_API_KEY,
+    );
+    this.replicate = new Replicate({
+      auth: process.env.REPLICATE_API_TOKEN,
+    });
+  }
+  async createComic(userPrompt: string, base64Image: string): Promise<any> {
     const jobId = uuidv4();
-    await this.comicsQueue.add('panels', {
+    await this.comicsQueue.add('comics-generation', {
       jobId,
-      panelScenarioDescription,
-      panelNumber,
+      prompt: userPrompt,
+      image: base64Image, // Make sure this is being passed
     });
     return { jobId, status: 'queued' };
   }
 
-  async getJobStatus(jobId: string): Promise<string> {
-    const job = await this.comicsQueue.getJob(jobId);
-    if (job) {
-      return job.progress as unknown as string;
-    } else {
-      throw new Error('Job not found');
+  private validateBase64Image(base64Image: string | undefined): string {
+    if (!base64Image) {
+      throw new Error('Base64 image data is undefined or empty');
     }
+
+    // Remove any whitespace or newlines
+    let cleanedBase64 = base64Image.replace(/\s/g, '');
+
+    // Check if the string already has the data URI prefix
+    if (!cleanedBase64.startsWith('data:image/')) {
+      cleanedBase64 = `data:image/png;base64,${cleanedBase64}`;
+    }
+
+    // Extract the base64 part (after the comma)
+    const base64Data = cleanedBase64.split(',')[1];
+
+    // Check minimum and maximum length
+    if (base64Data.length < 100) {
+      throw new Error('Base64 image data is too short');
+    }
+
+    const maxSizeInBytes = 10 * 1024 * 1024; // 10 MB
+    if (base64Data.length * 0.75 > maxSizeInBytes) {
+      throw new Error('Base64 image data exceeds maximum allowed size');
+    }
+
+    // Basic character set validation
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(base64Data)) {
+      throw new Error('Invalid base64 image data format');
+    }
+
+    console.log('Base64 image prefix:', cleanedBase64.substring(0, 30));
+
+    return cleanedBase64;
   }
 
   async describeImage(base64Image: string): Promise<any> {
+    const validatedBase64 = this.validateBase64Image(base64Image);
     const response = await this.openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         {
           role: 'system',
           content: `You are the best image describer. Describe the following image. We will create a beautiful art based on the image content and people 
-                Please answer the following questions:\n" 
-                       "0. What is this or who is this?\n" 
-                       "1. Is this a girl or boy?\n" 
-                       "2. What is this person wearing?\n" 
-                       "3. What is this person doing and what is the background?\n" 
-                       "4. What is the person's expression and mood?\n" 
-                       "7. What is the person's skin color?"
-                `,
+            
+            `,
         },
         {
           role: 'user',
@@ -59,7 +96,7 @@ export class ComicsService {
             {
               type: 'image_url',
               image_url: {
-                url: `data:image/jpeg;base64,${base64Image}`,
+                url: validatedBase64,
               },
             },
           ],
@@ -70,167 +107,72 @@ export class ComicsService {
   }
 
   async generateScenario(imageDescription: string, prompt: string) {
+    const style = 'american modern'
     const response = await this.openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         {
           role: 'system',
           content: `
-                You are a cartoon creator. 
-    
-                You will be given a short scenario, which you must split into 12 parts. 
-                Each part will be a different cartoon panel. 
-                For each cartoon panel, you will write a description of it with: 
-                - the characters in the panel, described precisely and consistently in each panel 
-                - the background of the panel 
-                - the same characters appearing throughout all panels without changing their descriptions 
-                - maintaining the same style for all panels 
-            
-                The description should consist only of words or groups of words delimited by commas, no sentences. 
-                Always use the characters' descriptions instead of their names in the cartoon panel descriptions. 
-                Do not repeat the same description for different panels. 
-            
-                You will also write the text of the panel. 
-                The text should not be more than 2 short sentences. 
-                Each sentence should start with the character's name. 
-            
-                Example input: 
-                Characters: Adrien is a guy with blond hair wearing glasses. Vincent is a guy with black hair wearing a hat. 
-                Adrien and Vincent want to start a new product, and they create it in one night before presenting it to the board. 
-            
-                Example output: 
-            
-                # Panel 1 
-                description: a guy with blond hair wearing glasses, a guy with black hair wearing a hat, sitting at the office, with computers 
-                text: 
-              
-                Vincent: I think Generative AI is the future of the company. 
-                Adrien: Let's create a new product with it. 
-            
-                # Panel 2 
-                description: a guy with blond hair wearing glasses, a guy with black hair wearing a hat, working hard, with papers and notes scattered around 
-                text: 
-              
-                Adrien: We need to finish this by morning. 
-                Vincent: Keep going, we can do it! 
-            
-                # Panel 3 
-                description: a guy with blond hair wearing glasses, a guy with black hair wearing a hat, presenting their product, in a conference room, with a projector 
-                text: 
-              
-                Vincent: Here's our new product! 
-                Adrien: We believe it will revolutionize the industry. 
-            
-                # end 
-            
-                Short Scenario: 
-                {scenario} 
-            
-                Split the scenario into 12 parts, ensuring the characters remain consistent in description throughout all panels.
-                You should return your answer in JSON array of comic panels. For example, consider this JSON array of comic panels: 
-                
-                {
-                  "panels": [
-                    {
-                      "panel": 1,
-                      "description": "a guy with light skin wearing a black t-shirt with 'factorial' in colorful print, wearing sunglasses, standing in a toy store, cheerful background with shelves of toys",
-                      "text": [
-                        "Alibek: Look at all these toys!",
-                        "Alibek: I could spend all day here!"
-                      ]
-                    },
-                    {
-                      "panel": 2,
-                      "description": "a guy with light skin wearing a black t-shirt with 'factorial' in colorful print, wearing sunglasses, crouching down to grab a plush toy, colorful plush toys around him",
-                      "text": [
-                        "Alibek: This plush toy looks amazing!",
-                        "Alibek: I have to take it home!"
-                      ]
-                    },
-                    {
-                      "panel": 3,
-                      "description": "a guy with light skin wearing a black t-shirt with 'factorial' in colorful print, wearing sunglasses, holding the plush toy close, smiling brightly, colorful store atmosphere",
-                      "text": [
-                        "Alibek: You're coming with me, little buddy!",
-                        "Alibek: We're going to have so much fun!"
-                      ]
-                    },
-                    {
-                      "panel": 4,
-                      "description": "a guy with light skin wearing a black t-shirt with 'factorial' in colorful print, wearing sunglasses, walking out of the store with the plush toy, sunny day outside, people in the background",
-                      "text": [
-                        "Alibek: The sunshine feels great!",
-                        "Alibek: Let’s find somewhere to play!"
-                      ]
-                    },
-                    {
-                      "panel": 5,
-                      "description": "a guy with light skin wearing a black t-shirt with 'factorial' in colorful print, wearing sunglasses, sitting on a park bench with the plush toy, green park setting",
-                      "text": [
-                        "Alibek: This place is perfect for us!",
-                        "Alibek: Let's enjoy the scenery together!"
-                      ]
-                    },
-                    {
-                      "panel": 6,
-                      "description": "a guy with light skin wearing a black t-shirt with 'factorial' in colorful print, wearing sunglasses, throwing the plush toy in the air, laughter in the park, other kids playing nearby",
-                      "text": ["Alibek: Wheee! You’re flying!", "Alibek: Catch you in a bit!"]
-                    },
-                    {
-                      "panel": 7,
-                      "description": "a guy with light skin wearing a black t-shirt with 'factorial' in colorful print, wearing sunglasses, sitting cross-legged on the ground with plush toy, grassy area, playful atmosphere",
-                      "text": [
-                        "Alibek: Time for some fun stories!",
-                        "Alibek: What shall we imagine today?"
-                      ]
-                    },
-                    {
-                      "panel": 8,
-                      "description": "a guy with light skin wearing a black t-shirt with 'factorial' in colorful print, wearing sunglasses, pretending to have a tea party with the plush toy, picnic blanket spread, joyful setting",
-                      "text": [
-                        "Alibek: Welcome to the tea party, my friend!",
-                        "Alibek: You're the guest of honor!"
-                      ]
-                    },
-                    {
-                      "panel": 9,
-                      "description": "a guy with light skin wearing a black t-shirt with 'factorial' in colorful print, wearing sunglasses, hugging the plush toy tightly, smiling widely, bright park background",
-                      "text": [
-                        "Alibek: You're the best companion!",
-                        "Alibek: I’m so glad I found you!"
-                      ]
-                    },
-                    {
-                      "panel": 10,
-                      "description": "a guy with light skin wearing a black t-shirt with 'factorial' in colorful print, wearing sunglasses, lying on the grass, plush toy resting on his chest, peaceful atmosphere",
-                      "text": [
-                        "Alibek: Let’s take a rest now.",
-                        "Alibek: Dreaming about our next adventure!"
-                      ]
-                    },
-                    {
-                      "panel": 11,
-                      "description": "a guy with light skin wearing a black t-shirt with 'factorial' in colorful print, wearing sunglasses, waving goodbye to the park as he walks home holding the plush toy, setting sun in the background",
-                      "text": [
-                        "Alibek: What a wonderful day we had!",
-                        "Alibek: Can't wait for tomorrow!"
-                      ]
-                    },
-                    {
-                      "panel": 12,
-                      "description": "a guy with light skin wearing a black t-shirt with 'factorial' in colorful print, wearing sunglasses, in his cozy bedroom, placing the plush toy on a shelf, warm lighting from a bedside lamp",
-                      "text": [
-                        "Alibek: Sleep well, buddy!",
-                        "Alibek: Tomorrow will be another fun day!"
-                      ]
-                    }
-                  ]
-                }
+          Вам будет дан краткий сценарий, который нужно разделить на 12 частей. Каждая часть будет отдельным кадром комикса. Для каждого кадра вы должны написать его описание, включающее:
+
+Персонажи кадра, описанные точно и последовательно в каждом кадре.
+Фон кадра.
+Те же персонажи должны появляться во всех кадрах без изменения их описаний.
+Сохранение единого стиля для всех кадров.
+Описание должно состоять только из слов или групп слов, разделенных запятыми, без предложений. Всегда используйте описания персонажей вместо их имен в описаниях кадров комикса. Не повторяйте одно и то же описание для разных кадров.
+
+Вы также должны написать текст для каждого кадра. Текст не должен превышать двух коротких предложений. Каждое предложение должно начинаться с имени персонажа.
+
+Пример ввода:
+Персонажи: Адриен - парень с блондинистыми волосами в очках. Винсент - парень с черными волосами в шляпе.
+Адриен и Винсент хотят создать новый продукт, и они создают его за одну ночь, прежде чем представить его совету директоров.
+          Example output: 
+
+          # Panel 1 
+          description: парень с блондинистыми волосами в очках, парень с черными волосами в шляпе, сидят в офисе, с компьютерами
+          text: 
+        
+          Vincent: Я думаю, что Генеративный ИИ - будущее компании. 
+          Adrien:  Давайте создадим новый продукт с его помощью.
+
+          # Panel 2 
+          description: парень с блондинистыми волосами в очках, парень с черными волосами в шляпе, усердно работают, бумаги и заметки разбросаны вокруг 
+          text: 
+        
+          Adrien: Нам нужно закончить это к утру.
+          Vincent: Продолжай, мы сможем это сделать!
+
+          # Panel 3 
+          description: парень с блондинистыми волосами в очках, парень с черными волосами в шляпе, представляют свой продукт, в конференц-зале, с проектором
+          text: 
+        
+          Vincent:  Вот наш новый продукт!
+          Adrien:Мы уверены, что он революционизирует индустрию.
+
+          # end 
+
+          Short Scenario: 
+          {scenario} 
+
+          Разделите сценарий на 12 частей, обеспечив сохранение описаний персонажей во всех кадрах. Вы должны создавать комиксы в современном американском стиле. Верните ваш ответ в формате JSON массива панелей комиксов. "text" напиши на русском, но description оставь на английском. Например, рассмотрите этот JSON массив панелей комиксов:
+          {
+            "panels": [
+              {
+                "panel": 1,
+                "description": "a guy with light skin wearing a black t-shirt with 'factorial' in colorful print, wearing sunglasses, standing in a toy store, cheerful background with shelves of toys in american modern comics style",
+                "text": [
+                  "Алекс: Давай приготовим сэндвичи.",
+                  "Мария: Отличная идея, я нарежу овощи."
+                ]
+              }
+          }
           `,
         },
         {
           role: 'user',
-          content: `Here is a user prompt: ${prompt}\n\n And here is the image description${imageDescription}`,
+          content: `Промпт юзера ${prompt}\n\n Описание фотографии, которую скинул юзер ${imageDescription} + стиль комикса в  ${style}
+          "text" напиши на русском, но description оставь на английском`,
         },
       ],
       response_format: {
@@ -240,15 +182,66 @@ export class ComicsService {
     return response.choices[0].message.content;
   }
 
-  async generateImageUsingStability(
+  async generateImageUsingDalle(
     panelScenario: string,
     panelNumber: number,
   ): Promise<string> {
+    try {
+      if (!panelScenario) {
+        throw new Error("'panelScenario' is required and cannot be empty");
+      }
+
+      console.log('Generating image for scenario:', panelScenario);
+
+      const response = await this.openai.images.generate({
+        model: 'dall-e-3',
+        prompt: panelScenario,
+        size: '1024x1024',
+        quality: 'hd',
+        n: 1,
+      });
+      console.log('DALL-E response:', response);
+
+      const imageUrl = response.data[0].url;
+      const imageResponse = await axios.get(imageUrl, {
+        responseType: 'arraybuffer',
+      });
+      const imageBuffer = Buffer.from(imageResponse.data);
+
+      const fileExtension = 'webp';
+      const fileName = `panel-${panelNumber}-${Date.now()}.${fileExtension}`;
+
+      const { error } = await this.supabase.storage
+        .from('vcomics')
+        .upload(fileName, imageBuffer, {
+          contentType: 'image/webp',
+        });
+
+      if (error) {
+        throw new Error(`Failed to upload image to Supabase: ${error.message}`);
+      }
+
+      const { data } = this.supabase.storage
+        .from('vcomics')
+        .getPublicUrl(fileName);
+
+      return data.publicUrl;
+    } catch (error) {
+      console.error('Error in generateImageUsingDalle:', error);
+      throw error;
+    }
+  }
+  async generateImageUsingStability(
+    imageDescription: string,
+    panelScenario: string,
+    panelNumber: number,
+  ): Promise<string> {
+    const prompt = `${imageDescription}\n${panelScenario} in american modern comics style`;
     const response = await axios.postForm(
       `https://api.stability.ai/v2beta/stable-image/generate/core`,
       axios.toFormData(
         {
-          prompt: panelScenario,
+          prompt: prompt,
           output_format: 'webp',
         },
         new FormData(),
@@ -267,7 +260,7 @@ export class ComicsService {
     const fileName = `panel-${panelNumber}-${Date.now()}.${fileExtension}`;
 
     const { error } = await this.supabase.storage
-      .from('panels')
+      .from('vcomics')
       .upload(fileName, Buffer.from(response.data), {
         contentType: 'image/webp',
       });
@@ -277,8 +270,133 @@ export class ComicsService {
     }
 
     const { data } = this.supabase.storage
-      .from('panels')
+      .from('vcomics')
       .getPublicUrl(fileName);
     return data.publicUrl;
+  }
+
+  // async generatePanelUsingReplicate(
+  //   panelDescription: string,
+  //   panelText: string[],
+  //   base64Image: string,
+  //   panelNumber: number,
+  // ): Promise<string> {
+  //   try {
+  //     const input = {
+  //       image: base64Image,
+  //       description: panelDescription,
+  //       texts: panelText.join('\n'),
+  //     };
+
+  //     const output = await this.replicate.run(
+  //       "bytedance/sdxl-lightning-4step:5f24084160c9089501c1b3545d9be3c27883ae2239b6f412990e82d4a6210f8f",
+  //       { input }
+  //     );
+
+  //     if (!output || !output[0]) {
+  //       throw new Error('Failed to generate image using Replicate');
+  //     }
+
+  //     const imageUrl = output[0];
+  //     const uniqueId = uuidv4();
+  //     const fileName = `panel-${panelNumber}-${uniqueId}.webp`;
+
+  //     // Download the image from the Replicate URL
+  //     const imageResponse = await fetch(imageUrl);
+  //     const imageBuffer = await imageResponse.arrayBuffer();
+
+  //     // Upload the image to Supabase
+  //     const { error } = await this.supabase.storage
+  //       .from('vcomics')
+  //       .upload(fileName, imageBuffer, {
+  //         contentType: 'image/webp',
+  //         upsert: false,
+  //       });
+
+  //     if (error) {
+  //       throw new Error(`Failed to upload image to Supabase: ${error.message}`);
+  //     }
+
+  //     const { data } = this.supabase.storage
+  //       .from('vcomics')
+  //       .getPublicUrl(fileName);
+
+  //     return data.publicUrl;
+  //   } catch (error) {
+  //     console.error('Error in generatePanelUsingReplicate:', error);
+  //     throw error;
+  //   }
+  // }
+  async savePanelData(panelImageUrl: string, panelText: string) {
+    return this.prisma.panel.create({
+      data: {
+        image_url: panelImageUrl,
+        text: panelText,
+      },
+    });
+  }
+  async createComicFromImage(
+    base64Image: string,
+    userPrompt: string,
+  ): Promise<any> {
+    if (!base64Image) {
+      throw new Error('Base64 image data is required');
+    }
+    console.log('Received base64 image length:', base64Image.length);
+
+    try {
+      const validatedBase64 = this.validateBase64Image(base64Image);
+      console.log('Validated base64 image length:', validatedBase64.length);
+
+      const imageDescription = await this.describeImage(validatedBase64);
+      console.log('Image description:', imageDescription);
+
+      const scenarioDescription = await this.generateScenario(
+        imageDescription,
+        userPrompt,
+      );
+      console.log(
+        'Scenario description:',
+        JSON.stringify(scenarioDescription, null, 2),
+      );
+
+      // Parse the scenario description
+      const scenarioObject = JSON.parse(scenarioDescription) as {
+        panels: Panel[];
+      };
+
+      const jobId = uuidv4();
+      const panelImageUrls: string[] = [];
+
+      for (let i = 0; i < 12; i++) {
+        const panel = scenarioObject.panels[i] || { description: '', text: [] };
+        console.log(
+          `Processing panel ${i + 1}:`,
+          JSON.stringify(panel, null, 2),
+        );
+
+        // Generate the image for the panel using Stability AI
+        const panelImageUrl = await this.generateImageUsingStability(
+          imageDescription,
+          `${panel.description} in American modern comics style`,
+          i + 1,
+        );
+        panelImageUrls.push(panelImageUrl);
+        await this.savePanelData(panelImageUrl, panel.text.join(' '));
+        await this.comicsQueue.add('generatePanel', {
+          jobId,
+          panelNumber: i + 1,
+          panelDescription: `${panel.description} in American modern comics style`,
+          panelText: panel.text,
+          panelImageUrl,
+          originalImage: validatedBase64,
+        });
+      }
+
+      return { jobId, status: 'queued', panelImageUrls };
+    } catch (error) {
+      console.error('Error in createComicFromImage:', error);
+      throw error;
+    }
   }
 }

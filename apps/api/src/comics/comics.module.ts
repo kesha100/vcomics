@@ -5,12 +5,13 @@ import { BullModule } from '@nestjs/bullmq';
 import { ComicsConsumer } from './comics.worker';
 import { BullBoardModule } from '@bull-board/nestjs';
 import { BullMQAdapter } from '@bull-board/api/bullMQAdapter';
-
+import { PrismaModule } from '../../prisma/prisma.module' 
 @Module({
   imports: [
     BullModule.registerQueue({
       name: 'comics-generation',
     }),
+    PrismaModule, 
     BullBoardModule.forFeature({
       name: 'comics-generation',
       adapter: BullMQAdapter,
@@ -18,5 +19,6 @@ import { BullMQAdapter } from '@bull-board/api/bullMQAdapter';
   ],
   controllers: [ComicsController],
   providers: [ComicsService, ComicsConsumer],
+
 })
 export class ComicsModule {}

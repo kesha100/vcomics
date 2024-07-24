@@ -24,38 +24,44 @@ export class ComicsController {
     @UploadedFile() file: Express.Multer.File,
   ) {
     if (!file) {
-      return new BadRequestException('Image file is required');
+      throw new BadRequestException('Image file is required');
     }
 
     const base64Image = file.buffer.toString('base64');
-    const imageDescription =
-      await this.comicsService.describeImage(base64Image);
+    const imageDescription = await this.comicsService.describeImage(base64Image);
     console.log(imageDescription);
-    const scenarioText = await this.comicsService.generateScenario(
-      imageDescription,
-      prompt,
-    );
+    const scenarioText = await this.comicsService.generateScenario(imageDescription, prompt);
     const scenarioJson = JSON.parse(scenarioText);
     console.log(scenarioJson);
-
-    // for (const panel of scenarioJson.panels) {
-    //   const job = await this.comicsService.createComic(
-    //     panel.description,
-    //     panel.panel,
-    //   );
-    //   console.log(job);
-    // }
-    const job = await this.comicsService.createComic(
-      scenarioJson.panels[0].description,
-      scenarioJson.panels[0].panel,
-    );
-    console.log(job);
 
     return scenarioJson;
   }
 
-  @Post('generate-panel')
-  async generatePanel(@Body('prompt') prompt: string) {
-    return await this.comicsService.generateImageUsingStability(prompt, 1);
+  // @Post('generate-panel')
+  // async generatePanel(@Body('prompt') prompt: string) {
+  //   return await this.comicsService.generateImageUsingStability(prompt, 1);
+  // }
+
+  @Post('create-comic')
+@UseInterceptors(FileInterceptor('image'))
+async createComic(@UploadedFile() file: Express.Multer.File, @Body('prompt') prompt: string) {
+  if (!file || !prompt) {
+    throw new BadRequestException('Image and prompt are required');
   }
+
+  console.log('Received file:', {
+    originalname: file.originalname,
+    mimetype: file.mimetype,
+    size: file.size
+  });
+
+  if (file.size < 1000) { // Adjust this threshold as needed
+    throw new BadRequestException('File size is too small');
+  }
+
+  const base64Image = file.buffer.toString('base64');
+  const comicPanels = await this.comicsService.createComicFromImage(base64Image, prompt);
+
+  return { panels: comicPanels };
+}
 }
