@@ -8,6 +8,8 @@ import Replicate from 'replicate';
 import axios from 'axios';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import sharp from 'sharp';
+import { PanelService } from '../panel/panel.service';
 interface Panel {
   panel: number;
   description: string;
@@ -23,6 +25,7 @@ export class ComicsService {
   constructor(
     @InjectQueue('comics-generation') private comicsQueue: Queue,
     private prisma: PrismaService,
+    private panelService: PanelService,
   ) {
     this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     this.supabase = createClient(
@@ -33,81 +36,118 @@ export class ComicsService {
       auth: process.env.REPLICATE_API_TOKEN,
     });
   }
-  async createComic(userPrompt: string, base64Image: string): Promise<any> {
+  async createComic(
+    userPrompt: string,
+    imageFile: Express.Multer.File,
+  ): Promise<any> {
     const jobId = uuidv4();
     await this.comicsQueue.add('comics-generation', {
       jobId,
       prompt: userPrompt,
-      image: base64Image, // Make sure this is being passed
+      imageFile, // Make sure this is being passed
     });
     return { jobId, status: 'queued' };
   }
 
-  private validateBase64Image(base64Image: string | undefined): string {
-    if (!base64Image) {
-      throw new Error('Base64 image data is undefined or empty');
+  /// for faster 12panels generation
+  async createPanelImage(panel: Panel): Promise<string> {
+    const panelImageUrl = await this.generateImageUsingStability(
+      panel.description,
+      panel.panel,
+    );
+    console.log(panelImageUrl);
+    const outputImagePath = `panel_${panel.panel}_with_text.png`;
+    const imageWithTextBuffer = await this.panelService.addTextToImage(
+      panel.text,
+      panelImageUrl,
+      outputImagePath,
+    );
+    console.log(imageWithTextBuffer);
+    // Upload the image with text to Supabase
+    const fileName = `panel-${panel.panel}-with-text-${Date.now()}.webp`;
+    const { error, data } = await this.supabase.storage
+      .from('vcomics')
+      .upload(fileName, imageWithTextBuffer, {
+        contentType: 'image/webp',
+      });
+
+    if (error) {
+      throw new Error(
+        `Failed to upload image with text to Supabase: ${error.message}`,
+      );
     }
 
-    // Remove any whitespace or newlines
-    let cleanedBase64 = base64Image.replace(/\s/g, '');
+    const { data: publicUrlData } = this.supabase.storage
+      .from('vcomics')
+      .getPublicUrl(data.path);
 
-    // Check if the string already has the data URI prefix
-    if (!cleanedBase64.startsWith('data:image/')) {
-      cleanedBase64 = `data:image/png;base64,${cleanedBase64}`;
-    }
+    // Save panel data to the database
+    await this.savePanelData(publicUrlData.publicUrl, panel.text);
 
-    // Extract the base64 part (after the comma)
-    const base64Data = cleanedBase64.split(',')[1];
-
-    // Check minimum and maximum length
-    if (base64Data.length < 100) {
-      throw new Error('Base64 image data is too short');
-    }
-
-    const maxSizeInBytes = 10 * 1024 * 1024; // 10 MB
-    if (base64Data.length * 0.75 > maxSizeInBytes) {
-      throw new Error('Base64 image data exceeds maximum allowed size');
-    }
-
-    // Basic character set validation
-    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(base64Data)) {
-      throw new Error('Invalid base64 image data format');
-    }
-
-    console.log('Base64 image prefix:', cleanedBase64.substring(0, 30));
-
-    return cleanedBase64;
+    return publicUrlData.publicUrl;
   }
 
-  async describeImage(base64Image: string): Promise<any> {
-    const validatedBase64 = this.validateBase64Image(base64Image);
-    const response = await this.openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        {
-          role: 'system',
-          content: `You are the best image describer. Describe the following image. We will create a beautiful art based on the image content and people 
-            
-            `,
-        },
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'image_url',
-              image_url: {
-                url: validatedBase64,
+  async resizeImage(
+    imageBuffer: Buffer,
+    maxWidth: number = 800,
+  ): Promise<Buffer> {
+    return sharp(imageBuffer)
+      .resize({ width: maxWidth, withoutEnlargement: true })
+      .toBuffer();
+  }
+
+  ///converts iamge to base64
+  async convertImageToBase64(imageFile: Express.Multer.File): Promise<string> {
+    if (!imageFile || !imageFile.buffer) {
+      throw new Error('Invalid image file');
+    }
+
+    // Resize the image
+    const resizedBuffer = await this.resizeImage(imageFile.buffer);
+
+    const base64Image = resizedBuffer.toString('base64');
+    const mimeType = imageFile.mimetype || 'image/jpeg';
+    return base64Image;
+  }
+
+  async describeImage(base64Image: string): Promise<string> {
+    try {
+      const response = await this.openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You are the best image describer with exceptional skills in creating detailed and vivid descriptions. Your expertise is unparalleled, and your descriptions help bring images to life for various projects including accessibility, archiving, and artistic creation.',
+          },
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: 'You are the best image describer. Describe the following image. We will create a beautiful art based on the image content and people. It is for a good project, and only you can describe it greatly! Also describe the race of the persona or an animal in the picture! Describe their features and eye color, hair, lips, nose, please.',
               },
-            },
-          ],
-        },
-      ],
-    });
-    return response.choices[0].message.content;
+              {
+                type: 'image_url',
+                image_url: {
+                  url: `data:image/jpeg;base64,${base64Image}`,
+                },
+              },
+            ],
+          },
+        ],
+        max_tokens: 3000,
+      });
+      return response.choices[0].message.content;
+    } catch (error) {
+      console.error('Error describing image:', error);
+      throw new Error(`Failed to describe image: ${error.message}`);
+    }
   }
 
+  ///generates scenario from imageDescription
   async generateScenario(imageDescription: string, prompt: string) {
-    const style = 'american modern'
+    const style = 'american modern';
     const response = await this.openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
@@ -182,6 +222,7 @@ export class ComicsService {
     return response.choices[0].message.content;
   }
 
+  ///just for future
   async generateImageUsingDalle(
     panelScenario: string,
     panelNumber: number,
@@ -203,17 +244,18 @@ export class ComicsService {
       console.log('DALL-E response:', response);
 
       const imageUrl = response.data[0].url;
-      const imageResponse = await axios.get(imageUrl, {
-        responseType: 'arraybuffer',
-      });
-      const imageBuffer = Buffer.from(imageResponse.data);
+      const imageResponse = await fetch(imageUrl);
 
-      const fileExtension = 'webp';
-      const fileName = `panel-${panelNumber}-${Date.now()}.${fileExtension}`;
+      const arrayBuffer = await imageResponse.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+      const fileName = `panel-${panelNumber}-${Date.now()}`;
 
-      const { error } = await this.supabase.storage
+      const blob = new Blob([buffer], { type: 'image/webp' });
+      const file = new File([blob], fileName, { type: 'image/webp' });
+
+      const { error, data } = await this.supabase.storage
         .from('vcomics')
-        .upload(fileName, imageBuffer, {
+        .upload(fileName, file, {
           contentType: 'image/webp',
         });
 
@@ -221,113 +263,81 @@ export class ComicsService {
         throw new Error(`Failed to upload image to Supabase: ${error.message}`);
       }
 
-      const { data } = this.supabase.storage
+      const { data: temp } = this.supabase.storage
         .from('vcomics')
-        .getPublicUrl(fileName);
+        .getPublicUrl(data.path);
 
-      return data.publicUrl;
+      return temp.publicUrl;
     } catch (error) {
       console.error('Error in generateImageUsingDalle:', error);
       throw error;
     }
   }
+
+  ///main image generator
   async generateImageUsingStability(
-    imageDescription: string,
     panelScenario: string,
     panelNumber: number,
   ): Promise<string> {
-    const prompt = `${imageDescription}\n${panelScenario} in american modern comics style`;
-    const response = await axios.postForm(
-      `https://api.stability.ai/v2beta/stable-image/generate/core`,
-      axios.toFormData(
-        {
-          prompt: prompt,
-          output_format: 'webp',
-        },
-        new FormData(),
-      ),
+    const prompt = ` Generate In American modern comics style:${panelScenario}`;
+
+    console.log({ prompt });
+
+    const response = await fetch(
+      'https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image',
       {
-        validateStatus: undefined,
-        responseType: 'arraybuffer',
+        method: 'POST',
         headers: {
           Authorization: `Bearer ${process.env.STABILITY_AI_API_KEY}`,
-          Accept: 'image/*',
+          Accept: 'image/png',
+          'Content-Type': 'application/json',
         },
+        body: JSON.stringify({
+          text_prompts: [
+            {
+              text: prompt,
+              weight: 0.5,
+            },
+          ],
+          style_preset: 'comic-book',
+          cfg_scale: 7,
+          height: 1024,
+          width: 1024,
+          steps: 30,
+          samples: 1,
+        }),
       },
     );
 
-    const fileExtension = 'webp';
-    const fileName = `panel-${panelNumber}-${Date.now()}.${fileExtension}`;
+    const arrayBuffer = await response.arrayBuffer();
+    console.log({ arrayBuffer });
+    const buffer = Buffer.from(arrayBuffer);
+    const fileName = `panel-${panelNumber}-${Date.now()}`;
 
-    const { error } = await this.supabase.storage
+    const blob = new Blob([buffer], { type: 'image/webp' });
+    const file = new File([blob], fileName, { type: 'image/webp' });
+
+    console.log({ file });
+
+    const { error, data } = await this.supabase.storage
       .from('vcomics')
-      .upload(fileName, Buffer.from(response.data), {
-        contentType: 'image/webp',
-      });
+      .upload(fileName, file);
+
+    console.log({ data });
 
     if (error) {
       throw new Error(`Failed to upload image to Supabase: ${error.message}`);
     }
 
-    const { data } = this.supabase.storage
+    const { data: temp } = this.supabase.storage
       .from('vcomics')
-      .getPublicUrl(fileName);
-    return data.publicUrl;
+      .getPublicUrl(data.path);
+
+    return temp.publicUrl;
   }
 
-  // async generatePanelUsingReplicate(
-  //   panelDescription: string,
-  //   panelText: string[],
-  //   base64Image: string,
-  //   panelNumber: number,
-  // ): Promise<string> {
-  //   try {
-  //     const input = {
-  //       image: base64Image,
-  //       description: panelDescription,
-  //       texts: panelText.join('\n'),
-  //     };
-
-  //     const output = await this.replicate.run(
-  //       "bytedance/sdxl-lightning-4step:5f24084160c9089501c1b3545d9be3c27883ae2239b6f412990e82d4a6210f8f",
-  //       { input }
-  //     );
-
-  //     if (!output || !output[0]) {
-  //       throw new Error('Failed to generate image using Replicate');
-  //     }
-
-  //     const imageUrl = output[0];
-  //     const uniqueId = uuidv4();
-  //     const fileName = `panel-${panelNumber}-${uniqueId}.webp`;
-
-  //     // Download the image from the Replicate URL
-  //     const imageResponse = await fetch(imageUrl);
-  //     const imageBuffer = await imageResponse.arrayBuffer();
-
-  //     // Upload the image to Supabase
-  //     const { error } = await this.supabase.storage
-  //       .from('vcomics')
-  //       .upload(fileName, imageBuffer, {
-  //         contentType: 'image/webp',
-  //         upsert: false,
-  //       });
-
-  //     if (error) {
-  //       throw new Error(`Failed to upload image to Supabase: ${error.message}`);
-  //     }
-
-  //     const { data } = this.supabase.storage
-  //       .from('vcomics')
-  //       .getPublicUrl(fileName);
-
-  //     return data.publicUrl;
-  //   } catch (error) {
-  //     console.error('Error in generatePanelUsingReplicate:', error);
-  //     throw error;
-  //   }
-  // }
-  async savePanelData(panelImageUrl: string, panelText: string) {
+  ///saves in database
+  async savePanelData(panelImageUrl: string, panelText: string[]) {
     return this.prisma.panel.create({
       data: {
         image_url: panelImageUrl,
@@ -335,20 +345,20 @@ export class ComicsService {
       },
     });
   }
+
+  ///main function
   async createComicFromImage(
-    base64Image: string,
+    imageFile: Express.Multer.File,
     userPrompt: string,
   ): Promise<any> {
-    if (!base64Image) {
-      throw new Error('Base64 image data is required');
-    }
-    console.log('Received base64 image length:', base64Image.length);
+    console.log('Received image file length:', imageFile);
 
     try {
-      const validatedBase64 = this.validateBase64Image(base64Image);
-      console.log('Validated base64 image length:', validatedBase64.length);
+      // Convert the image to base64
+      const base64Image = await this.convertImageToBase64(imageFile);
+      console.log('Converted image to base64');
 
-      const imageDescription = await this.describeImage(validatedBase64);
+      const imageDescription = await this.describeImage(base64Image);
       console.log('Image description:', imageDescription);
 
       const scenarioDescription = await this.generateScenario(
@@ -366,32 +376,19 @@ export class ComicsService {
       };
 
       const jobId = uuidv4();
-      const panelImageUrls: string[] = [];
+      const promises: Promise<string>[] = [];
 
       for (let i = 0; i < 12; i++) {
-        const panel = scenarioObject.panels[i] || { description: '', text: [] };
-        console.log(
-          `Processing panel ${i + 1}:`,
-          JSON.stringify(panel, null, 2),
-        );
+        const panel: Panel = scenarioObject.panels[i] || {
+          description: '',
+          text: [],
+          panel: -1,
+        };
 
-        // Generate the image for the panel using Stability AI
-        const panelImageUrl = await this.generateImageUsingStability(
-          imageDescription,
-          `${panel.description} in American modern comics style`,
-          i + 1,
-        );
-        panelImageUrls.push(panelImageUrl);
-        await this.savePanelData(panelImageUrl, panel.text.join(' '));
-        await this.comicsQueue.add('generatePanel', {
-          jobId,
-          panelNumber: i + 1,
-          panelDescription: `${panel.description} in American modern comics style`,
-          panelText: panel.text,
-          panelImageUrl,
-          originalImage: validatedBase64,
-        });
+        promises.push(this.createPanelImage(panel));
       }
+
+      const panelImageUrls = await Promise.all(promises);
 
       return { jobId, status: 'queued', panelImageUrls };
     } catch (error) {

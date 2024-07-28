@@ -10,6 +10,7 @@ import { ExpressAdapter } from '@bull-board/express';
 import { UploadthingModule } from './uploadthing/uploadthing.module';
 import { PrismaService } from '../prisma/prisma.service';
 import { PrismaModule } from 'prisma/prisma.module';
+import { PanelModule } from './panel/panel.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -31,7 +32,9 @@ import { PrismaModule } from 'prisma/prisma.module';
     }),
     ComicsModule,
     UploadthingModule,
-    PrismaModule
+    PrismaModule,
+    PanelModule
+    
   ]
 })
 export class AppModule {}

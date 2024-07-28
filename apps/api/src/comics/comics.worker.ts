@@ -1,36 +1,49 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ComicsService } from './comics.service';
+
+interface Panel {
+  panel: number;
+  description: string;
+  text: string[];
+}
 
 @Processor('comics-generation', { concurrency: 1 })
 @Injectable()
 export class ComicsConsumer extends WorkerHost {
+  private readonly logger = new Logger(ComicsConsumer.name);
+
   constructor(private readonly comicsService: ComicsService) {
     super();
   }
 
-  async process(job: Job<any, any, string>): Promise<any> {
+  async process(job: Job<{ jobId: string } & Panel>): Promise<any> {
     try {
-      const { jobId, prompt, image } = job.data;
-      await job.updateProgress(10);
+      const { jobId, description, panel, text } = job.data;
 
-      // const imageDescription = await this.comicsService.describeImage(image);
-      // console.log('Image description:', imageDescription);
-      // await job.updateProgress(30);
+      this.logger.log(`Processing job ${jobId}`);
 
-      // const scenario = await this.comicsService.generateScenario(imageDescription, prompt);
-      // console.log('Generated scenario:', scenario);
-      // await job.updateProgress(40);
+      await job.updateProgress(20);
 
-      // const panelResults = await this.comicsService.createComicFromImage(image, prompt);
-      // console.log('Panel results:', panelResults);
+      try {
+        const scenario = `${description} in American modern comics style`;
+
+        const panelImageUrl =
+          await this.comicsService.generateImageUsingStability(scenario, panel);
+
+        job.updateProgress(60);
+
+        await this.comicsService.savePanelData(panelImageUrl, text);
+
+        console.log('save panel data');
+      } catch (error) {
+        this.logger.error(`Error processing panel ${panel}: ${error.message}`);
+      }
+
       await job.updateProgress(100);
-
-      // return panelResults;
-
     } catch (error) {
-      console.error(`Job ${job.id} - Error: ${error.message}`);
+      this.logger.error(`Job ${job.id} - Error: ${error.message}`);
       await job.updateProgress(100);
       throw error;
     }

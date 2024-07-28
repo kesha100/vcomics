@@ -30,7 +30,8 @@ model Vcomics {
 }
 
 model Panel {
-  panelId  Int      @id @default(autoincrement())
+  panelId   Int      @id @default(autoincrement())
   image_url String   
-  text     String
+  text      String[]
+  createdAt DateTime @default(now())
 }
