@@ -382,9 +382,16 @@ export class ComicsService {
       );
 
       // Parse the scenario description
-      const scenarioObject = JSON.parse(scenarioDescription) as {
-        panels: Panel[];
-      };
+      let scenarioObject;
+      if (typeof scenarioDescription === 'string') {
+        scenarioObject = JSON.parse(scenarioDescription) as {
+          panels: Panel[];
+        };
+      } else {
+        scenarioObject = scenarioDescription as {
+          panels: Panel[];
+        };
+      }
 
       const jobId = uuidv4();
       const promises: Promise<string>[] = [];
