@@ -29,7 +29,7 @@ COPY --from=build /app/dist ./dist
 
 # Install only production dependencies
 COPY package*.json ./
-RUN npm install --only=production
+RUN npm install
 
 # Expose the application port
 EXPOSE 3000
