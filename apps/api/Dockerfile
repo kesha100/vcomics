@@ -25,6 +25,9 @@ RUN npm run build
 # Production Stage
 FROM node:18
 
+# Install Redis
+RUN apt-get update && apt-get install -y redis-server
+
 # Set the working directory
 WORKDIR /app
 
@@ -35,10 +38,14 @@ COPY --from=build /app/prisma ./prisma
 COPY package*.json ./
 
 # Install production dependencies
-RUN npm install 
+RUN npm install
+
+# Copy a custom entrypoint script
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 # Expose port
 EXPOSE 3000
 
-# Define the command to run the application
-CMD ["node", "dist/src/main.js"]
+# Use the custom entrypoint script
+ENTRYPOINT ["/entrypoint.sh"]
