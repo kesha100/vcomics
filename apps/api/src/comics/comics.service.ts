@@ -219,9 +219,20 @@ export class ComicsService {
         type: 'json_object',
       },
     });
-    return response.choices[0].message.content;
-  }
+    const responseText = response.choices[0].message.content
+    console.log('Raw API Response:', responseText);
 
+    let responseJson;
+    try {
+      responseJson = JSON.parse(responseText);
+    } catch (parseError) {
+      console.error('Failed to parse response as JSON:', parseError);
+      console.error('Response Text:', responseText);
+      throw parseError;
+    }
+
+    return responseJson;
+  }
   ///just for future
   async generateImageUsingDalle(
     panelScenario: string,

@@ -10,7 +10,7 @@ async function bootstrap() {
 
   // app.use("/api/uploadthing", uploadthingService.getRouteHandler());
 
-  const port = configService.get('PORT');
+  const port = configService.get('PORT') || 3000;
   await app.listen(port);
 }
 bootstrap();
