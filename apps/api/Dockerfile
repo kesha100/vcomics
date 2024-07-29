@@ -1,4 +1,4 @@
-# Use the official Node.js image as the base image
+# Build Stage
 FROM node:18 AS build
 
 # Install dependencies needed for the build process
@@ -16,11 +16,28 @@ RUN npm install
 # Copy the rest of the application files
 COPY . .
 
+# Generate Prisma client
+RUN npm run prisma:generate
+
 # Build the application
 RUN npm run build
 
-# Use a new stage to run the app
+# Production Stage
+FROM node:18
 
+# Set the working directory
+WORKDIR /app
+
+# Copy only the necessary files from the build stage
+COPY --from=build /app/dist ./dist
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/prisma ./prisma
+COPY package*.json ./
+
+# Install production dependencies
+RUN npm install 
+
+# Expose port
 EXPOSE 3000
 
 # Define the command to run the application
