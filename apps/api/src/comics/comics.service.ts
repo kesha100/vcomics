@@ -291,9 +291,9 @@ export class ComicsService {
     panelNumber: number,
   ): Promise<string> {
     const prompt = ` Generate In American modern comics style:${panelScenario}`;
-
+  
     console.log({ prompt });
-
+  
     const response = await fetch(
       'https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image',
       {
@@ -319,31 +319,30 @@ export class ComicsService {
         }),
       },
     );
-
+  
     const arrayBuffer = await response.arrayBuffer();
     console.log({ arrayBuffer });
     const buffer = Buffer.from(arrayBuffer);
-    const fileName = `panel-${panelNumber}-${Date.now()}`;
-
-    const blob = new Blob([buffer], { type: 'image/webp' });
-    const file = new File([blob], fileName, { type: 'image/webp' });
-
-    console.log({ file });
-
+    const fileName = `panel-${panelNumber}-${Date.now()}.webp`;
+  
+    console.log({ buffer });
+  
     const { error, data } = await this.supabase.storage
       .from('vcomics')
-      .upload(fileName, file);
-
+      .upload(fileName, buffer, {
+        contentType: 'image/webp',
+      });
+  
     console.log({ data });
-
+  
     if (error) {
       throw new Error(`Failed to upload image to Supabase: ${error.message}`);
     }
-
+  
     const { data: temp } = this.supabase.storage
       .from('vcomics')
       .getPublicUrl(data.path);
-
+  
     return temp.publicUrl;
   }
 
