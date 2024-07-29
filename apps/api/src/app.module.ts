@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { BullModule } from '@nestjs/bullmq';
+// import { BullModule } from '@nestjs/bullmq';
 import { ComicsModule } from './comics/comics.module';
 import { ConfigModule } from '@nestjs/config';
 import { envValidationSchema } from './core/env-validation-schema';
@@ -20,16 +20,16 @@ import { PanelModule } from './panel/panel.module';
     MulterModule.registerAsync({
       useClass: MulterConfigService,
     }),
-    BullModule.forRoot({
-      connection: {
-        host: 'localhost',
-        port: 6379,
-      },
-    }),
-    BullBoardModule.forRoot({
-      route: '/queues',
-      adapter: ExpressAdapter,
-    }),
+    // BullModule.forRoot({
+    //   connection: {
+    //     host: 'localhost',
+    //     port: 6379,
+    //   },
+    // }),
+    // BullBoardModule.forRoot({
+    //   route: '/queues',
+    //   adapter: ExpressAdapter,
+    // }),
     ComicsModule,
     UploadthingModule,
     PrismaModule,

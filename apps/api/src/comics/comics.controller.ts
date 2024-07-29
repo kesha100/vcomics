@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { ComicsService } from './comics.service';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { BullBoardInstance, InjectBullBoard } from '@bull-board/nestjs';
+// import { BullBoardInstance, InjectBullBoard } from '@bull-board/nestjs';
 
 interface Panel {
   panel: number;
@@ -20,7 +20,7 @@ interface Panel {
 export class ComicsController {
   constructor(
     private readonly comicsService: ComicsService,
-    @InjectBullBoard() private readonly boardInstance: BullBoardInstance,
+
   ) {}
 
   @Post('generate-scenario')
