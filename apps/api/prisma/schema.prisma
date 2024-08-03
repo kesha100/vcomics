@@ -20,6 +20,7 @@ model User {
   email    String    @unique
   password String
   vcomics  Vcomics[] @relation("UserVcomics")
+  
 }
 
 model Vcomics {
@@ -34,4 +35,12 @@ model Panel {
   image_url String   
   text      String[]
   createdAt DateTime @default(now())
+}
+
+model ComicGeneration {
+  id        Int      @id @default(autoincrement())
+  ipAddress String   @unique
+  count     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }

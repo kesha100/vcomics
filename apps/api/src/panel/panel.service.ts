@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import sharp from 'sharp';
 import { createCanvas, loadImage, CanvasRenderingContext2D } from 'canvas';
@@ -15,6 +15,20 @@ interface Panel {
 export class PanelService {
   constructor(private readonly prisma: PrismaService) {}
 
+  // async getComicGenerationCount(ipAddress: string): Promise<number> {
+  //   const record = await this.prisma.comicGeneration.findUnique({
+  //     where: { ipAddress },
+  //   });
+  //   return record ? record.count : 0;
+  // }
+
+  // private async incrementComicGenerationCount(ipAddress: string): Promise<void> {
+  //   await this.prisma.comicGeneration.upsert({
+  //     where: { ipAddress },
+  //     update: { count: { increment: 1 } },
+  //     create: { ipAddress, count: 1 },
+  //   });
+  // }
   async addTextToImage(
     text: string[],
     imageUrl: string,
@@ -33,8 +47,6 @@ export class PanelService {
       const image = await loadImage(pngBuffer);
       const canvas = createCanvas(image.width, image.height);
       const ctx = canvas.getContext('2d');
-
-      const joinedtext = text.join(', ');
 
       ctx.drawImage(image, 0, 0);
 

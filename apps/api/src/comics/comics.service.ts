@@ -1,6 +1,6 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { Injectable } from '@nestjs/common';
+import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
 import { v4 as uuidv4 } from 'uuid';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { OpenAI } from 'openai';
@@ -10,6 +10,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import sharp from 'sharp';
 import { PanelService } from '../panel/panel.service';
+
 interface Panel {
   panel: number;
   description: string;
@@ -146,7 +147,11 @@ export class ComicsService {
   }
 
   ///generates scenario from imageDescription
-  async generateScenario(imageDescription: string, prompt: string) {
+  async generateScenario(
+    imageDescription: string,
+    prompt: string,
+    language: string,
+  ) {
     const style = 'american modern';
     const response = await this.openai.chat.completions.create({
       model: 'gpt-4o-mini',
@@ -212,14 +217,14 @@ export class ComicsService {
         {
           role: 'user',
           content: `Промпт юзера ${prompt}\n\n Описание фотографии, которую скинул юзер ${imageDescription} + стиль комикса в  ${style}
-          "text" напиши на русском, но description оставь на английском`,
+          "text" напиши на ${language}, но description оставь на английском`,
         },
       ],
       response_format: {
         type: 'json_object',
       },
     });
-    const responseText = response.choices[0].message.content
+    const responseText = response.choices[0].message.content;
     console.log('Raw API Response:', responseText);
 
     let responseJson;
@@ -291,9 +296,9 @@ export class ComicsService {
     panelNumber: number,
   ): Promise<string> {
     const prompt = ` Generate In American modern comics style:${panelScenario}`;
-  
+
     console.log({ prompt });
-  
+
     const response = await fetch(
       'https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image',
       {
@@ -310,7 +315,7 @@ export class ComicsService {
               weight: 0.5,
             },
           ],
-          style_preset: 'comic-book',
+          // style_preset: 'comic-book',
           cfg_scale: 7,
           height: 1024,
           width: 1024,
@@ -319,34 +324,34 @@ export class ComicsService {
         }),
       },
     );
-  
+
     const arrayBuffer = await response.arrayBuffer();
     console.log({ arrayBuffer });
     const buffer = Buffer.from(arrayBuffer);
     const fileName = `panel-${panelNumber}-${Date.now()}.webp`;
-  
+
     console.log({ buffer });
-  
+
     const { error, data } = await this.supabase.storage
       .from('vcomics')
       .upload(fileName, buffer, {
         contentType: 'image/webp',
       });
-  
+
     console.log({ data });
-  
+
     if (error) {
       throw new Error(`Failed to upload image to Supabase: ${error.message}`);
     }
-  
+
     const { data: temp } = this.supabase.storage
       .from('vcomics')
       .getPublicUrl(data.path);
-  
+
     return temp.publicUrl;
   }
 
-  ///saves in database
+  // /saves in database
   async savePanelData(panelImageUrl: string, panelText: string[]) {
     return this.prisma.panel.create({
       data: {
@@ -355,13 +360,33 @@ export class ComicsService {
       },
     });
   }
+  // async getComicGenerationCount(ipAddress: string): Promise<number> {
+  //   const record = await this.prisma.comicGeneration.findUnique({
+  //     where: { ipAddress },
+  //   });
+  //   return record ? record.count : 0;
+  // }
+
+  // private async incrementComicGenerationCount(ipAddress: string): Promise<void> {
+  //   await this.prisma.comicGeneration.upsert({
+  //     where: { ipAddress },
+  //     update: { count: { increment: 1 } },
+  //     create: { ipAddress, count: 1 },
+  //   });
+  // }
 
   ///main function
   async createComicFromImage(
     imageFile: Express.Multer.File,
     userPrompt: string,
-  ): Promise<any> {
+    language: string,
+    // ipAddress: string
+  ): Promise<string[]> {
     console.log('Received image file length:', imageFile);
+    //   const count = await this.getComicGenerationCount(ipAddress);
+    // if (count >= 3) {
+    //   throw new HttpException('Free comic generation limit reached', HttpStatus.FORBIDDEN);
+    // }
 
     try {
       // Convert the image to base64
@@ -374,6 +399,7 @@ export class ComicsService {
       const scenarioDescription = await this.generateScenario(
         imageDescription,
         userPrompt,
+        language,
       );
       console.log(
         'Scenario description:',
@@ -404,10 +430,12 @@ export class ComicsService {
 
         promises.push(this.createPanelImage(panel));
       }
-
+      // await this.incrementComicGenerationCount(ipAddress);
+      // const newCount = await this.getComicGenerationCount(ipAddress);
+      // const remainingTries = Math.max(0, 3 - newCount);
       const panelImageUrls = await Promise.all(promises);
 
-      return { jobId, status: 'queued', panelImageUrls };
+      return panelImageUrls;
     } catch (error) {
       console.error('Error in createComicFromImage:', error);
       throw error;
