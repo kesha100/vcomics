@@ -7,6 +7,8 @@ import { BullBoardModule } from '@bull-board/nestjs';
 import { BullMQAdapter } from '@bull-board/api/bullMQAdapter';
 import { PrismaModule } from '../../prisma/prisma.module' 
 import { PanelService } from 'src/panel/panel.service';
+import { ImagesController } from './comics.controller';
+
 @Module({
   imports: [
     BullModule.registerQueue({
@@ -18,7 +20,7 @@ import { PanelService } from 'src/panel/panel.service';
       adapter: BullMQAdapter,
     }),
   ],
-  controllers: [ComicsController],
+  controllers: [ComicsController, ImagesController],
   providers: [ComicsService, ComicsConsumer, PanelService],
 
 })

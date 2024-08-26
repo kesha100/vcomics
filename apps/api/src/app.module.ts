@@ -7,7 +7,7 @@ import { MulterModule } from '@nestjs/platform-express';
 import { MulterConfigService } from './multer/multer-config.service';
 import { BullBoardModule } from '@bull-board/nestjs';
 import { ExpressAdapter } from '@bull-board/express';
-import { UploadthingModule } from './uploadthing/uploadthing.module';
+// import { UploadthingModule } from './uploadthing/uploadthing.module';
 import { PrismaService } from '../prisma/prisma.service';
 import { PrismaModule } from 'prisma/prisma.module';
 import { PanelModule } from './panel/panel.module';
@@ -36,7 +36,7 @@ import { PanelModule } from './panel/panel.module';
       adapter: ExpressAdapter,
     }),
     ComicsModule,
-    UploadthingModule,
+    // UploadthingModule,
     PrismaModule,
     PanelModule
   ]

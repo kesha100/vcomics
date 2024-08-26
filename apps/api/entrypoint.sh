@@ -7,6 +7,6 @@ redis-server --daemonize yes
 until redis-cli ping; do
   sleep 1
 done
-
+npx prisma generate
 # Start your Node.js application
 node dist/src/main.js

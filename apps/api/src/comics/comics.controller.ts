@@ -17,7 +17,49 @@ interface Panel {
   description: string;
   text: string[];
 }
+import {  Param, NotFoundException } from '@nestjs/common';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
+@Controller('images')
+export class ImagesController {
+  private supabase: SupabaseClient;
+
+  constructor() {
+    // Initialize Supabase client
+    this.supabase = createClient(
+      process.env.SUPABASE_API_URL,
+      process.env.SUPABASE_API_KEY
+    );
+  }
+
+  @Post('upload')
+  @UseInterceptors(FileInterceptor('image'))
+  async uploadImage(
+    @UploadedFile() file: Express.Multer.File,
+    @Body('imageName') imageName: string,
+  ) {
+    try {
+      if (!file) {
+        throw new BadRequestException('Image file is required');
+      }
+
+      // Assuming your images are stored in a bucket named 'images'
+      const { data, error } = await this.supabase.storage
+        .from('vcomics')
+        .upload(imageName, file.buffer, {
+          contentType: file.mimetype,
+        });
+
+      if (error) {
+        throw new Error(`Supabase error: ${error.message}`);
+      }
+
+      return { success: true, data };
+    } catch (error) {
+      throw new BadRequestException(`Error uploading image: ${error.message}`);
+    }
+  }
+}
 @Controller('comics')
 export class ComicsController {
   constructor(

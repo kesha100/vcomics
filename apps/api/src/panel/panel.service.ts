@@ -35,12 +35,11 @@ export class PanelService {
     outputImagePath: string,
   ): Promise<Buffer> {
     try {
-      const response = await fetch(imageUrl);
-      const blob = await response.blob();
-      const imageBuffer = await blob.arrayBuffer();
+      const response = await axios.get(imageUrl, { responseType: 'arraybuffer' });
+      const imageBuffer = Buffer.from(response.data, 'binary');
 
       console.log({ imageBuffer });
-      console.log({ blob, imageUrl });
+      console.log({ imageUrl });
 
       const pngBuffer = await sharp(imageBuffer).png().toBuffer();
 

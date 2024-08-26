@@ -65,28 +65,25 @@ export class ComicsService {
     );
     console.log(imageWithTextBuffer);
     // Upload the image with text to Supabase
-    const fileName = `panel-${panel.panel}-with-text-${Date.now()}.webp`;
+    const filePath = `panel-${panel.panel}-${Date.now()}.webp`;
     const { error, data } = await this.supabase.storage
       .from('vcomics')
-      .upload(fileName, imageWithTextBuffer, {
+      .upload(filePath, imageWithTextBuffer, {
         contentType: 'image/webp',
       });
 
     if (error) {
-      throw new Error(
-        `Failed to upload image with text to Supabase: ${error.message}`,
-      );
+      throw new Error(`Failed to upload image to Supabase: ${error.message}`);
     }
 
+    // Get the public URL of the uploaded image
     const { data: publicUrlData } = this.supabase.storage
       .from('vcomics')
       .getPublicUrl(data.path);
 
-    // Save panel data to the database
-    await this.savePanelData(publicUrlData.publicUrl, panel.text);
-
     return publicUrlData.publicUrl;
   }
+
 
   async resizeImage(
     imageBuffer: Buffer,
@@ -154,7 +151,8 @@ export class ComicsService {
   ) {
     const style = 'american modern';
     const response = await this.openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+  
+      model: 'gpt-4o',
       messages: [
         {
           role: 'system',
@@ -201,6 +199,7 @@ export class ComicsService {
           {scenario} 
 
           Разделите сценарий на 12 частей, обеспечив сохранение описаний персонажей во всех кадрах. Вы должны создавать комиксы в современном американском стиле. Верните ваш ответ в формате JSON массива панелей комиксов. "text" напиши на русском, но description оставь на английском. Например, рассмотрите этот JSON массив панелей комиксов:
+          "text": должен описывать слова персонажа, его речь.
           {
             "panels": [
               {
@@ -223,21 +222,15 @@ export class ComicsService {
       response_format: {
         type: 'json_object',
       },
+      temperature: 0.5,
     });
-    const responseText = response.choices[0].message.content;
-    console.log('Raw API Response:', responseText);
-
-    let responseJson;
-    try {
-      responseJson = JSON.parse(responseText);
-    } catch (parseError) {
-      console.error('Failed to parse response as JSON:', parseError);
-      console.error('Response Text:', responseText);
-      throw parseError;
-    }
-
-    return responseJson;
+    const parsedContent = JSON.parse(response.choices[0].message.content);
+    console.log('Raw OpenAI response:', response.choices[0].message.content);
+  return parsedContent;
   }
+  
+
+
   ///just for future
   async generateImageUsingDalle(
     panelScenario: string,
@@ -408,14 +401,19 @@ export class ComicsService {
 
       // Parse the scenario description
       let scenarioObject;
-      if (typeof scenarioDescription === 'string') {
-        scenarioObject = JSON.parse(scenarioDescription) as {
-          panels: Panel[];
-        };
-      } else {
-        scenarioObject = scenarioDescription as {
-          panels: Panel[];
-        };
+      try {
+        if (typeof scenarioDescription === 'string') {
+          console.log('Parsing scenario description as string');
+          scenarioObject = JSON.parse(scenarioDescription) as { panels: Panel[] };
+        } else {
+          console.log('Using scenario description as object');
+          scenarioObject = scenarioDescription as { panels: Panel[] };
+        }
+        console.log('Parsed scenario object:', JSON.stringify(scenarioObject, null, 2));
+      } catch (parseError) {
+        console.error('Error parsing scenario description:', parseError);
+        console.log('Raw scenario description:', scenarioDescription);
+        throw new Error(`Failed to parse scenario description: ${parseError.message}`);
       }
 
       const jobId = uuidv4();
@@ -435,7 +433,7 @@ export class ComicsService {
       // const remainingTries = Math.max(0, 3 - newCount);
       const panelImageUrls = await Promise.all(promises);
 
-      return panelImageUrls;
+      return panelImageUrls ;
     } catch (error) {
       console.error('Error in createComicFromImage:', error);
       throw error;
