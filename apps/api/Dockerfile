@@ -6,14 +6,14 @@ RUN apt-get update && apt-get install -y python3 python3-dev python3-pip build-e
 
 WORKDIR /app
 
-# Copy package.json and package-lock.json
-COPY package*.json ./
+# Copy the entire project
+COPY . .
+
+# Navigate to the api directory (adjust if necessary)
+WORKDIR /app/apps/api
 
 # Install dependencies
 RUN npm i
-
-# Copy the rest of the application files
-COPY . .
 
 # Generate Prisma client
 RUN npx prisma generate
@@ -30,12 +30,12 @@ RUN apt-get update && apt-get install -y redis-server curl
 WORKDIR /app
 
 # Copy built assets from the build stage
-COPY --from=build /apps/api//dist ./dist
-COPY --from=build /apps/api/node_modules ./node_modules
-COPY --from=build /apps/api/package*.json ./
+COPY --from=build /app/apps/api/dist ./dist
+COPY --from=build /app/apps/api/node_modules ./node_modules
+COPY --from=build /app/apps/api/package*.json ./
 
 # Copy Prisma files
-COPY --from=build /apps/api/prisma ./prisma
+COPY --from=build /app/apps/api/prisma ./prisma
 
 # Copy the entrypoint script
 COPY entrypoint.sh /entrypoint.sh
