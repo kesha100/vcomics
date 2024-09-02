@@ -9,14 +9,17 @@ WORKDIR /apps
 # Copy package.json and package-lock.json
 COPY package*.json ./
 
+# Copy the prisma folder
+COPY prisma ./prisma
+
 # Install dependencies
 RUN npm ci
 
-# Copy the rest of the application files
-COPY . .
-
 # Generate Prisma client
 RUN npx prisma generate
+
+# Copy the rest of the application files
+COPY . .
 
 # Build the application
 RUN npm run build
