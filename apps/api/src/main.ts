@@ -12,7 +12,7 @@ async function bootstrap() {
 
   // app.use("/api/uploadthing", uploadthingService.getRouteHandler());
   app.enableCors({
-    origin: 'https://vcomics.vercel.app/', // Replace with your Vercel app's domain
+    origin: '*', // Replace with your Vercel app's domain
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
   });
